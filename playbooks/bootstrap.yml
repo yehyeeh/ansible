@@ -1,0 +1,100 @@
+- hosts: all
+ 
+  vars:
+    primary_user: ubuntu
+    primary_user_key: ""
+
+  tasks:
+
+    - name: Add primary user
+      ansible.builtin.user:
+        name: "{{ primary_user }}"
+        shell: /bin/bash
+    
+    - name: Add authorized keys for primary user
+      ansible.posix.authorized_key:
+        user: "{{ primary_user }}"
+        key: "{{ primary_user_key }}"
+    
+    - name: Allow primary user to have passwordless sudo
+      community.general.sudoers:
+        name: allow_sudo_to_primary_user
+        user: "{{ primary_user }}"
+        commands: ALL
+        nopassword: true
+    
+    - name: Aliases
+      block:
+      - name: Fix .bashrc alias
+        ansible.builtin.lineinfile:
+          path: /home/{{ primary_user }}/.bashrc
+          regexp: "^alias ll='ls -alF'"
+          line: "alias ll='ls -lF'"
+      - name: Create docker compose alias
+        ansible.builtin.lineinfile:
+          path: /home/{{ primary_user }}/.bash_aliases
+          regexp: "^alias dc='docker compose'"
+          line: "alias dc='docker compose'"
+          create: yes
+      - name: chown .bash_aliases 
+        ansible.builtin.file:
+          path: /home/{{ primary_user }}/.bash_aliases
+          owner: "{{ primary_user }}"
+          group: "{{ primary_user }}"
+          mode: '0644'
+
+    - name: Set timezone to America/Los_Angeles
+      community.general.timezone:
+        name: America/Los_Angeles
+
+    - name: Add Docker apt repo
+      block: 
+        -  name: Add Docker apt key 
+           ansible.builtin.get_url:
+             url: https://download.docker.com/linux/ubuntu/gpg
+             dest: /etc/apt/keyrings/docker.asc
+        -  name: Add docker apt source
+           ansible.builtin.apt_repository:
+             repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+             state: present
+    
+    - name: Only run "update_cache=yes" if the last one is more than 3600 seconds ago
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: apt dist-upgrade
+      ansible.builtin.apt:
+        upgrade: dist
+      register: upgrade_output
+
+    - name: Show output from previous task
+      when: upgrade_output.stdout is defined
+      debug: 
+        msg: "{{ upgrade_output.stdout_lines }}"
+
+    - name: Install list of packages
+      ansible.builtin.apt:
+        pkg:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+          - vim
+          - screen
+
+    - name: Reinstall iputils-ping to fix broken pkg
+      block:
+        - name: Check if iputils-ping is fixed
+          ansible.builtin.stat: 
+            path: /root/.iputils-ping.reinstalled
+          register: reinstall_status
+        - name: Fix iputils-ping
+          ansible.builtin.shell:
+            cmd: apt install --reinstall -y iputils-ping && touch /root/.iputils-ping.reinstalled
+          when: reinstall_status.stat.exists == False
+
+
+
+
